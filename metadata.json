@@ -1,0 +1,6 @@
+{
+  "name": "NeonFlow",
+  "description": "Современное приложение для управления Wi-Fi и BLE неоновой LED-лентой с плавными переходами, авторскими сценами, светомузыкой и таймерами",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

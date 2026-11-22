@@ -1,0 +1,87 @@
+<resources>
+    <string name="app_name">NeonFlow</string>
+
+    <!-- Navigation tabs -->
+    <string name="nav_color">Цвет</string>
+    <string name="nav_scenes">Сцены</string>
+    <string name="nav_music">Музыка</string>
+    <string name="nav_timer">Таймер</string>
+
+    <!-- Header & Status -->
+    <string name="status_disconnected">Не подключено</string>
+    <string name="status_connecting">Подключение…</string>
+    <string name="status_connected">Подключено</string>
+    <string name="cd_power_button">Включить или выключить ленту</string>
+    <string name="cd_devices_button">Выбрать устройство</string>
+    <string name="cd_settings_button">Настройки контроллера</string>
+    <string name="cd_color_wheel">Цветовой круг для выбора оттенка</string>
+    <string name="cd_add_scene">Создать пользовательскую сцену</string>
+
+    <!-- Color Studio -->
+    <string name="mode_wheel">Колесо</string>
+    <string name="mode_cct">Белый CCT</string>
+    <string name="mode_rgb">RGB</string>
+    <string name="label_brightness">Яркость</string>
+    <string name="label_smoothness">Плавность перехода</string>
+    <string name="label_speed">Скорость</string>
+    <string name="label_favorites">Избранные цвета</string>
+    <string name="hint_long_press_save">Удерживайте слот, чтобы сохранить текущий цвет</string>
+    <string name="label_classic_neon">Классика и неон</string>
+    <string name="label_warm_light">Тёплый</string>
+    <string name="label_neutral_light">Нейтральный</string>
+    <string name="label_cool_light">Холодный</string>
+
+    <!-- Scenes -->
+    <string name="cat_all">Все</string>
+    <string name="cat_smooth">Плавные</string>
+    <string name="cat_ambient">Атмосфера</string>
+    <string name="cat_party">Динамика</string>
+    <string name="cat_custom">Мои</string>
+    <string name="btn_create_scene">Новая сцена</string>
+    <string name="dialog_create_scene_title">Создать плавную сцену</string>
+    <string name="label_scene_name">Название сцены</string>
+    <string name="label_scene_colors">Цвета перелива (от 2 до 5)</string>
+    <string name="label_transition_curve">Характер плавности</string>
+    <string name="btn_save">Сохранить</string>
+    <string name="btn_cancel">Отмена</string>
+
+    <!-- Music & Mic -->
+    <string name="music_tab_mic">Микрофон</string>
+    <string name="music_tab_player">Плеер</string>
+    <string name="mic_source_phone">Микрофон телефона</string>
+    <string name="mic_source_strip">Микрофон ленты</string>
+    <string name="label_sensitivity">Чувствительность</string>
+    <string name="label_decay_smoothness">Мягкость спада</string>
+    <string name="label_bass_boost">Акцент на бас</string>
+    <string name="btn_start_mic">Запустить светомузыку</string>
+    <string name="btn_stop_mic">Остановить захват</string>
+    <string name="mic_permission_hint">Разрешите доступ к микрофону для реакции ленты на звук</string>
+    <string name="btn_pick_audio">Добавить треки</string>
+    <string name="empty_playlist_title">Плейлист пуст</string>
+    <string name="empty_playlist_subtitle">Добавьте аудиофайлы с устройства — лента будет плавно пульсировать в такт музыке</string>
+
+    <!-- Timer & Schedules -->
+    <string name="sleep_timer_title">Таймер сна</string>
+    <string name="sleep_timer_fade">Плавное затухание перед выключением</string>
+    <string name="sleep_timer_cancel">Отменить таймер</string>
+    <string name="schedules_title">Расписание</string>
+    <string name="btn_add_schedule">Добавить правило</string>
+    <string name="empty_schedules_hint">Создайте расписание для автоматического включения, рассвета или выключения ленты</string>
+
+    <!-- Device Manager -->
+    <string name="devices_title">Подключение ленты</string>
+    <string name="tab_wifi">Wi-Fi сеть</string>
+    <string name="tab_ble">Bluetooth</string>
+    <string name="btn_scan_wifi">Найти в Wi-Fi</string>
+    <string name="btn_scan_ble">Искать Bluetooth</string>
+    <string name="btn_add_manual">Добавить по IP</string>
+    <string name="btn_disconnect">Отключить</string>
+
+    <!-- Settings & Pin Sequence -->
+    <string name="settings_title">Настройки контроллера</string>
+    <string name="pin_sequence_title">Порядок каналов RGB</string>
+    <string name="pin_sequence_hint">Если красный на экране светится зелёным на ленте — подберите правильный порядок пинов</string>
+    <string name="fade_power_title">Плавное вкл / выкл</string>
+    <string name="fade_power_subtitle">Мягкое разгорание и затухание вместо резкого щелчка</string>
+    <string name="fps_limit_title">Частота отправки кадров</string>
+</resources>

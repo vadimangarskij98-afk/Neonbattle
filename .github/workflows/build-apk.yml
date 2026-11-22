@@ -1,0 +1,79 @@
+name: Build NeonFlow APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build & Publish NeonFlow APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK & accept licenses
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Generate debug signing keystore if missing
+        run: |
+          if [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=NeonFlow,O=NeonFlow,C=RU"
+          fi
+
+      - name: Build NeonFlow APK
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: Prepare named APK file
+        run: |
+          mkdir -p release-apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-apk/NeonFlow-v2.0.apk
+
+      - name: Upload APK as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeonFlow-APK
+          path: release-apk/NeonFlow-v2.0.apk
+          retention-days: 30
+
+      - name: Publish direct APK download in GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: NeonFlow v2.0 (APK)
+          body: |
+            Готовая сборка **NeonFlow v2.0** для Android.
+            Скачайте файл **NeonFlow-v2.0.apk** ниже прямо на телефон и установите.
+          files: release-apk/NeonFlow-v2.0.apk
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
