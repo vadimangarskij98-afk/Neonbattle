@@ -30,7 +30,7 @@ jobs:
 
       - name: Install Android SDK packages
         run: |
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          sdkmanager "platforms;android-36" "platforms;android-36.1" "build-tools;36.0.0" "platform-tools"
 
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses || true
@@ -55,24 +55,24 @@ jobs:
       - name: Prepare named APK file
         run: |
           mkdir -p release-apk
-          cp app/build/outputs/apk/debug/app-debug.apk release-apk/NeonFlow-v2.0.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-apk/NeonFlow-v2.1.apk
 
       - name: Upload APK as Workflow Artifact
         uses: actions/upload-artifact@v4
         with:
           name: NeonFlow-APK
-          path: release-apk/NeonFlow-v2.0.apk
+          path: release-apk/NeonFlow-v2.1.apk
           retention-days: 30
 
       - name: Publish direct APK download in GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: NeonFlow v2.0 (APK)
+          name: NeonFlow v2.1 (APK)
           body: |
-            Готовая сборка **NeonFlow v2.0** для Android.
-            Скачайте файл **NeonFlow-v2.0.apk** ниже прямо на телефон и установите.
-          files: release-apk/NeonFlow-v2.0.apk
+            Готовая сборка **NeonFlow v2.1** для Android.
+            Скачайте файл **NeonFlow-v2.1.apk** ниже прямо на телефон и установите.
+          files: release-apk/NeonFlow-v2.1.apk
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -60,11 +60,27 @@ object LedProtocolPackets {
     // Lotus Lantern / ELK-BLEDOM 9-byte protocol (BLE GATT 0xFFF3 & Wi-Fi TCP/UDP)
     // -------------------------------------------------------------------------
 
-    fun lotusPower(on: Boolean): ByteArray = byteArrayOf(
-        0x7E, 0x00, 0x04,
-        if (on) 0x01 else 0x00,
-        0x00, 0x00, 0x00, 0x00,
-        0xEF.toByte()
+    /**
+     * ELK-BLEDOM / Lotus Lantern power packets. These are the frames the stock Lotus Lantern app
+     * sends: ON = 7E 00 04 F0 00 01 FF 00 EF, OFF = 7E 00 04 00 00 00 FF 00 EF.
+     */
+    fun lotusPower(on: Boolean): ByteArray = if (on) {
+        byteArrayOf(0x7E, 0x00, 0x04, 0xF0.toByte(), 0x00, 0x01, 0xFF.toByte(), 0x00, 0xEF.toByte())
+    } else {
+        byteArrayOf(0x7E, 0x00, 0x04, 0x00, 0x00, 0x00, 0xFF.toByte(), 0x00, 0xEF.toByte())
+    }
+
+    /** MELK-xxxx / ELK-BLEDOB firmware variant of the power frame. */
+    fun lotusPowerMelk(on: Boolean): ByteArray = if (on) {
+        byteArrayOf(0x7E, 0x07, 0x04, 0xFF.toByte(), 0x00, 0x01, 0x02, 0x01, 0xEF.toByte())
+    } else {
+        byteArrayOf(0x7E, 0x07, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0xEF.toByte())
+    }
+
+    /** Wake-up frames required by MELK controllers before they accept colour commands. */
+    fun lotusMelkInit(): List<ByteArray> = listOf(
+        byteArrayOf(0x7E, 0x07, 0x83.toByte()),
+        byteArrayOf(0x7E, 0x04, 0x04)
     )
 
     fun lotusColor(color: RgbColor, pinOrder: PinOrder): ByteArray {
@@ -96,13 +112,6 @@ object LedProtocolPackets {
     fun lotusSpeed(speedPercent: Int): ByteArray = byteArrayOf(
         0x7E, 0x00, 0x02,
         speedPercent.coerceIn(0, 100).toByte(),
-        0x00, 0x00, 0x00, 0x00,
-        0xEF.toByte()
-    )
-
-    fun lotusPinOrder(pinOrder: PinOrder): ByteArray = byteArrayOf(
-        0x7E, 0x00, 0x08,
-        pinOrder.lotusWireCode.toByte(),
         0x00, 0x00, 0x00, 0x00,
         0xEF.toByte()
     )

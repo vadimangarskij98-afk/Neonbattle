@@ -1,7 +1,5 @@
 package com.example.ui.sheets
 
-import android.Manifest
-import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -65,6 +63,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.hardware.requiredBlePermissions
 import com.example.model.ConnectionState
 import com.example.model.ControllerProtocol
 import com.example.model.LedDevice
@@ -106,9 +105,8 @@ fun DeviceManagerSheet(
     val blePermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
-        if (results.values.all { it }) {
-            onScanBle()
-        }
+        // Scan either way: if something was denied the ViewModel reports what is missing.
+        if (results.isNotEmpty()) onScanBle()
     }
 
     ModalBottomSheet(
@@ -355,15 +353,7 @@ fun DeviceManagerSheet(
                             } else if (hasBlePermissions()) {
                                 onScanBle()
                             } else {
-                                val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                    arrayOf(
-                                        Manifest.permission.BLUETOOTH_SCAN,
-                                        Manifest.permission.BLUETOOTH_CONNECT
-                                    )
-                                } else {
-                                    arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION)
-                                }
-                                blePermissionLauncher.launch(perms)
+                                blePermissionLauncher.launch(requiredBlePermissions())
                             }
                         },
                         modifier = Modifier

@@ -146,6 +146,7 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
     private var powerToggleJob: Job? = null
     private var persistSliderJob: Job? = null
     private var bleScanTimeoutJob: Job? = null
+    private var reconnectJob: Job? = null
 
     private var lastSentColor: RgbColor? = null
     private var lastHardwareSendMs: Long = 0L
@@ -182,7 +183,54 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
                     schedules = stored.schedules
                 )
             }
+            autoConnectLastDevice(stored.lastDeviceId)
         }
+    }
+
+    /** Reconnects to the strip used last time, so the app is ready to use right after launch. */
+    private fun autoConnectLastDevice(lastDeviceId: String?) {
+        val device = _uiState.value.savedDevices.firstOrNull { it.id == lastDeviceId }
+            ?: _uiState.value.savedDevices.lastOrNull()
+            ?: return
+        if (!device.protocol.isWifi && (!bleTransport.hasBlePermissions() || !bleTransport.isBluetoothEnabled())) {
+            return
+        }
+        if (_uiState.value.connectionState !is ConnectionState.Disconnected) return
+        saveAndConnectDevice(device, silent = true)
+    }
+
+    private fun autoReconnect(device: LedDevice) {
+        reconnectJob?.cancel()
+        reconnectJob = viewModelScope.launch {
+            for (attempt in 1..4) {
+                delay(1500L * attempt)
+                val current = _uiState.value.connectionState
+                // User picked another device or disconnected manually meanwhile
+                if (current !is ConnectionState.Connecting || current.device.id != device.id) return@launch
+                val result = bleTransport.connect(device)
+                if (result.isSuccess) {
+                    onBleConnected(device, result.getOrThrow(), "Соединение восстановлено")
+                    return@launch
+                }
+            }
+            _uiState.update {
+                it.copy(
+                    connectionState = ConnectionState.Error("Лента недоступна по Bluetooth", device),
+                    statusBannerMessage = "Не удалось восстановить связь с «${device.name}»"
+                )
+            }
+        }
+    }
+
+    private suspend fun onBleConnected(device: LedDevice, chipset: com.example.model.BleChipset, message: String?) {
+        lastSentColor = null
+        _uiState.update {
+            it.copy(
+                connectionState = ConnectionState.Connected(device = device, chipsetInfo = chipset.label),
+                statusBannerMessage = message
+            )
+        }
+        bleTransport.sendPower(_uiState.value.isPowerOn)
     }
 
     fun refreshConnectivityFlags() {
@@ -211,10 +259,11 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
                 if (currentConn != null && !currentConn.device.protocol.isWifi) {
                     _uiState.update {
                         it.copy(
-                            connectionState = ConnectionState.Error(reason, currentConn.device),
-                            statusBannerMessage = reason
+                            connectionState = ConnectionState.Connecting(currentConn.device),
+                            statusBannerMessage = "$reason — переподключаюсь…"
                         )
                     }
+                    autoReconnect(currentConn.device)
                 }
             }
         }
@@ -382,7 +431,8 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
             kotlin.math.abs(prev.b - primary.b) >= 1 ||
             kotlin.math.abs(prev.w - primary.w) >= 2
 
-        if (!changedSignificantly && !isAnimated) return
+        val keepAliveDue = state.isPowerOn && now - lastHardwareSendMs >= 2_500L
+        if (!changedSignificantly && !isAnimated && !keepAliveDue) return
 
         lastHardwareSendMs = now
         lastSentColor = primary
@@ -910,7 +960,11 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
         saveAndConnectDevice(device)
     }
 
-    fun saveAndConnectDevice(device: LedDevice) {
+    fun saveAndConnectDevice(device: LedDevice) = saveAndConnectDevice(device, silent = false)
+
+    private fun saveAndConnectDevice(device: LedDevice, silent: Boolean) {
+        reconnectJob?.cancel()
+        stopBleScan()
         val savedDevice = device.copy(isSaved = true)
         val merged = (_uiState.value.savedDevices.filterNot { it.id == savedDevice.id } + savedDevice)
         _uiState.update {
@@ -947,7 +1001,7 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
                                     message = err.message ?: "Не удалось подключиться по Wi-Fi",
                                     device = savedDevice
                                 ),
-                                statusBannerMessage = "Wi-Fi ошибка: ${err.message ?: "проверьте сеть и IP"}"
+                                statusBannerMessage = if (silent) null else "Wi-Fi ошибка: ${err.message ?: "проверьте сеть и IP"}"
                             )
                         }
                     }
@@ -956,17 +1010,7 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
                 val result = bleTransport.connect(savedDevice)
                 result.fold(
                     onSuccess = { chipset ->
-                        lastSentColor = null
-                        _uiState.update {
-                            it.copy(
-                                connectionState = ConnectionState.Connected(
-                                    device = savedDevice,
-                                    chipsetInfo = chipset.label
-                                ),
-                                statusBannerMessage = "BLE подключено: ${savedDevice.name} (${chipset.label})"
-                            )
-                        }
-                        bleTransport.sendPower(_uiState.value.isPowerOn)
+                        onBleConnected(savedDevice, chipset, "Подключено: ${savedDevice.name}")
                     },
                     onFailure = { err ->
                         _uiState.update {
@@ -975,7 +1019,7 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
                                     message = err.message ?: "Не удалось подключиться по Bluetooth",
                                     device = savedDevice
                                 ),
-                                statusBannerMessage = "BLE ошибка: ${err.message ?: "попробуйте снова"}"
+                                statusBannerMessage = if (silent) null else "BLE ошибка: ${err.message ?: "попробуйте снова"}"
                             )
                         }
                     }
@@ -995,6 +1039,7 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnectDevice() {
+        reconnectJob?.cancel()
         viewModelScope.launch {
             wifiTransport.disconnect()
             bleTransport.disconnect()
@@ -1042,6 +1087,7 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         micEngine.stopCapture()
         musicPlayer.stopAndRelease()
+        reconnectJob?.cancel()
         bleTransport.stopScan()
         bleTransport.disconnect()
     }

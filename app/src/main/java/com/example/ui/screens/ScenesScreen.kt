@@ -229,21 +229,44 @@ fun ScenesScreen(
                     ) {
                         FlowDirection.entries.forEach { dir ->
                             val selected = state.flowDirection == dir
-                            FilterChip(
-                                selected = selected,
+                            // Two-line segment: arrow on top, label below — never truncated
+                            Surface(
                                 onClick = { onFlowDirectionChange(dir) },
-                                label = {
-                                    Text(
-                                        text = "${dir.shortArrow} ${dir.title}",
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        style = MaterialTheme.typography.labelSmall
-                                    )
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (selected) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainerHigh
                                 },
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (selected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outlineVariant
+                                ),
                                 modifier = Modifier
                                     .weight(1f)
                                     .testTag("flow_dir_${dir.name.lowercase()}")
-                            )
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 2.dp)
+                                ) {
+                                    Text(
+                                        text = dir.shortArrow,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = if (selected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = dir.title,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
                     }
                 }

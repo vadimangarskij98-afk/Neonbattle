@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.neonflow.xkpvqr"
     minSdk = 24
     targetSdk = 36
-    versionCode = 2
-    versionName = "2.0"
+    versionCode = 3
+    versionName = "2.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -63,7 +63,17 @@ android {
     compose = true
     buildConfig = true
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      // Optional Maven mirror for Robolectric's runtime Android jars (set ROBOLECTRIC_REPO_URL).
+      all { test ->
+        System.getenv("ROBOLECTRIC_REPO_URL")?.let {
+          test.systemProperty("robolectric.dependency.repo.url", it)
+        }
+      }
+    }
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true

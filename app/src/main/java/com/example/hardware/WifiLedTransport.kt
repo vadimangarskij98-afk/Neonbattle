@@ -257,20 +257,12 @@ class WifiLedTransport(private val context: Context) {
         }
     }
 
-    suspend fun sendPinOrder(pinOrder: PinOrder): Boolean = withContext(Dispatchers.IO) {
-        writeMutex.withLock {
-            val device = activeDevice ?: return@withLock false
-            runCatching {
-                when (device.protocol) {
-                    ControllerProtocol.WIFI_LOTUS_TCP ->
-                        writeTcp(device, LedProtocolPackets.lotusPinOrder(pinOrder))
-                    ControllerProtocol.WIFI_LOTUS_UDP ->
-                        writeUdp(device.address, device.port, LedProtocolPackets.lotusPinOrder(pinOrder))
-                    else -> true
-                }
-            }.getOrDefault(false)
-        }
-    }
+    /**
+     * Channel order is remapped in software inside every colour packet, so nothing has to be sent
+     * to the controller. Sending a hardware re-map as well would swap the channels twice.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun sendPinOrder(pinOrder: PinOrder): Boolean = true
 
     suspend fun sendExternalMic(enabled: Boolean, sensitivityPercent: Int): Boolean =
         withContext(Dispatchers.IO) {

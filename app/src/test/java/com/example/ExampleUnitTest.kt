@@ -35,6 +35,18 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun lotusPowerPacketsMatchStockApp() {
+        assertArrayEquals(
+            byteArrayOf(0x7E, 0x00, 0x04, 0xF0.toByte(), 0x00, 0x01, 0xFF.toByte(), 0x00, 0xEF.toByte()),
+            LedProtocolPackets.lotusPower(true)
+        )
+        assertArrayEquals(
+            byteArrayOf(0x7E, 0x00, 0x04, 0x00, 0x00, 0x00, 0xFF.toByte(), 0x00, 0xEF.toByte()),
+            LedProtocolPackets.lotusPower(false)
+        )
+    }
+
+    @Test
     fun lotusAndTrionesBlePacketsAreValid() {
         val lotus = LedProtocolPackets.lotusColor(RgbColor(255, 128, 64), PinOrder.RGB)
         assertEquals(9, lotus.size)
