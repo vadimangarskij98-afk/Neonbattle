@@ -4,60 +4,58 @@ import com.example.model.PinOrder
 import com.example.model.RgbColor
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 /**
- * Binary and JSON command builders for Wi-Fi and BLE LED strip controllers.
- * Supports:
- * - Magic Home / Flux Wi-Fi (TCP 5577)
- * - Lotus Lantern / ELK-BLEDOM (BLE 0xFFF3 & Wi-Fi TCP/UDP 7E..EF)
- * - Triones / HappyLighting BLE (0xFFD9 56..AA / CC..33 / BB..44)
- * - WLED (HTTP JSON + 36-segment UDP DRGB realtime frames)
+ * Real wire-level command packet builders for Wi-Fi and Bluetooth LE LED controllers:
+ * 1. Lotus Lantern V6 / ELK-BLEDOM / MELK-OA/OC (7E 07 05 03 R G B 10 EF / 7E 04 04 F0 00 01 FF 00 EF)
+ * 2. Lotus / ELK-BLEDOM Legacy (7E 00 05 03 R G B 00 EF / 7E 00 04 01 00 00 00 00 EF)
+ * 3. LotusLanternX / BJ_LED RGBIC (BC 01 01 01 55 / BC 04 06 H_hi H_lo S_hi S_lo 00 00 55)
+ * 4. Triones / HappyLighting (56 R G B 00 F0 AA / CC 23 33)
+ * 5. Magic Home / Flux / Zengge Wi-Fi TCP 5577 & BLE (31 R G B W 00 0F <cs> / 71 23 0F A3)
+ * 6. WLED HTTP JSON + UDP DRGB realtime frames
  */
 object LedProtocolPackets {
 
     // -------------------------------------------------------------------------
-    // Magic Home / Flux Wi-Fi / Zengge protocol (TCP port 5577)
+    // 1. Lotus Lantern V6 / ELK-BLEDOM / MELK-OA (wl.smartled modern protocol)
     // -------------------------------------------------------------------------
 
-    fun magicHomePower(on: Boolean): ByteArray {
-        val state = if (on) 0x23 else 0x24
-        return appendChecksum(byteArrayOf(0x71, state.toByte(), 0x0F))
+    fun lotusV6Power(on: Boolean): ByteArray = if (on) {
+        byteArrayOf(
+            0x7E, 0x04, 0x04, 0xF0.toByte(),
+            0x00, 0x01, 0xFF.toByte(), 0x00,
+            0xEF.toByte()
+        )
+    } else {
+        byteArrayOf(
+            0x7E, 0x04, 0x04, 0x00,
+            0x00, 0x00, 0xFF.toByte(), 0x00,
+            0xEF.toByte()
+        )
     }
 
-    fun magicHomeColor(color: RgbColor, pinOrder: PinOrder): ByteArray {
+    fun lotusV6Color(color: RgbColor, pinOrder: PinOrder): ByteArray {
         val mapped = color.applyPinOrder(pinOrder)
-        return appendChecksum(
-            byteArrayOf(
-                0x31,
-                mapped.r.coerceIn(0, 255).toByte(),
-                mapped.g.coerceIn(0, 255).toByte(),
-                mapped.b.coerceIn(0, 255).toByte(),
-                mapped.w.coerceIn(0, 255).toByte(),
-                0x00,
-                0x0F
-            )
+        return byteArrayOf(
+            0x7E, 0x07, 0x05, 0x03,
+            mapped.r.coerceIn(0, 255).toByte(),
+            mapped.g.coerceIn(0, 255).toByte(),
+            mapped.b.coerceIn(0, 255).toByte(),
+            0x10,
+            0xEF.toByte()
         )
     }
 
-    fun magicHomeBuiltInMode(modeCode: Int, speedPercent: Int): ByteArray {
-        // Magic Home speed: 1 (fastest) .. 31 (slowest)
-        val wireSpeed = (31 - (speedPercent.coerceIn(0, 100) * 30 / 100)).coerceIn(1, 31)
-        return appendChecksum(
-            byteArrayOf(
-                0x61,
-                modeCode.coerceIn(0x25, 0x38).toByte(),
-                wireSpeed.toByte(),
-                0x0F
-            )
-        )
-    }
-
-    fun magicHomeQueryState(): ByteArray = byteArrayOf(
-        0x81.toByte(), 0x8A.toByte(), 0x8B.toByte(), 0x96.toByte()
+    fun lotusV6Brightness(percent: Int): ByteArray = byteArrayOf(
+        0x7E, 0x04, 0x01,
+        percent.coerceIn(0, 100).toByte(),
+        0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0x00,
+        0xEF.toByte()
     )
 
     // -------------------------------------------------------------------------
-    // Lotus Lantern / ELK-BLEDOM 9-byte protocol (BLE GATT 0xFFF3 & Wi-Fi TCP/UDP)
+    // 2. Lotus / ELK-BLEDOM Legacy 9-byte protocol (7E 00 .. 00 EF)
     // -------------------------------------------------------------------------
 
     fun lotusPower(on: Boolean): ByteArray = byteArrayOf(
@@ -87,16 +85,16 @@ object LedProtocolPackets {
     )
 
     fun lotusBuiltInMode(modeCode: Int): ByteArray = byteArrayOf(
-        0x7E, 0x00, 0x03,
+        0x7E, 0x05, 0x03,
         modeCode.coerceIn(0x80, 0x9F).toByte(),
-        0x03, 0x00, 0x00, 0x00,
+        0x03, 0xFF.toByte(), 0xFF.toByte(), 0x00,
         0xEF.toByte()
     )
 
     fun lotusSpeed(speedPercent: Int): ByteArray = byteArrayOf(
-        0x7E, 0x00, 0x02,
+        0x7E, 0x04, 0x02,
         speedPercent.coerceIn(0, 100).toByte(),
-        0x00, 0x00, 0x00, 0x00,
+        0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0x00,
         0xEF.toByte()
     )
 
@@ -116,7 +114,44 @@ object LedProtocolPackets {
     )
 
     // -------------------------------------------------------------------------
-    // Triones / HappyLighting BLE protocol (GATT 0xFFD9)
+    // 3. LotusLanternX / BJ_LED RGBIC protocol (BC .. 55)
+    // -------------------------------------------------------------------------
+
+    fun lotusXPower(on: Boolean): ByteArray = byteArrayOf(
+        0xBC.toByte(), 0x01, 0x01,
+        if (on) 0x01 else 0x00,
+        0x55
+    )
+
+    fun lotusXColor(color: RgbColor, pinOrder: PinOrder): ByteArray {
+        val mapped = color.applyPinOrder(pinOrder)
+        val (h, s, _) = RgbColor.toHsv(mapped)
+        val hueInt = h.roundToInt().coerceIn(0, 360)
+        val satInt = (s * 1000f).roundToInt().coerceIn(0, 1000)
+        return byteArrayOf(
+            0xBC.toByte(), 0x04, 0x06,
+            ((hueInt shr 8) and 0xFF).toByte(),
+            (hueInt and 0xFF).toByte(),
+            ((satInt shr 8) and 0xFF).toByte(),
+            (satInt and 0xFF).toByte(),
+            0x00, 0x00,
+            0x55
+        )
+    }
+
+    fun lotusXBrightness(percent: Int): ByteArray {
+        val bri = (percent.coerceIn(0, 100) * 10).coerceIn(0, 1000)
+        return byteArrayOf(
+            0xBC.toByte(), 0x05, 0x06,
+            ((bri shr 8) and 0xFF).toByte(),
+            (bri and 0xFF).toByte(),
+            0x00, 0x00, 0x00, 0x00,
+            0x55
+        )
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. Triones / HappyLighting BLE protocol (GATT 0xFFD9 / 0xFFE9)
     // -------------------------------------------------------------------------
 
     fun trionesPower(on: Boolean): ByteArray = byteArrayOf(
@@ -149,7 +184,43 @@ object LedProtocolPackets {
     }
 
     // -------------------------------------------------------------------------
-    // WLED HTTP JSON API & UDP DRGB Realtime Stream (port 21324)
+    // 5. Magic Home / Flux Wi-Fi (TCP 5577) & Magic BLE (31..0F)
+    // -------------------------------------------------------------------------
+
+    fun magicHomePower(on: Boolean): ByteArray {
+        val state = if (on) 0x23 else 0x24
+        return appendChecksum(byteArrayOf(0x71, state.toByte(), 0x0F))
+    }
+
+    fun magicHomeColor(color: RgbColor, pinOrder: PinOrder): ByteArray {
+        val mapped = color.applyPinOrder(pinOrder)
+        return appendChecksum(
+            byteArrayOf(
+                0x31,
+                mapped.r.coerceIn(0, 255).toByte(),
+                mapped.g.coerceIn(0, 255).toByte(),
+                mapped.b.coerceIn(0, 255).toByte(),
+                mapped.w.coerceIn(0, 255).toByte(),
+                0x00,
+                0x0F
+            )
+        )
+    }
+
+    fun magicHomeBuiltInMode(modeCode: Int, speedPercent: Int): ByteArray {
+        val wireSpeed = (31 - (speedPercent.coerceIn(0, 100) * 30 / 100)).coerceIn(1, 31)
+        return appendChecksum(
+            byteArrayOf(
+                0x61,
+                modeCode.coerceIn(0x25, 0x38).toByte(),
+                wireSpeed.toByte(),
+                0x0F
+            )
+        )
+    }
+
+    // -------------------------------------------------------------------------
+    // 6. WLED HTTP JSON API & UDP DRGB Realtime Stream (port 21324)
     // -------------------------------------------------------------------------
 
     fun wledStateJson(
@@ -180,10 +251,6 @@ object LedProtocolPackets {
         }.toString()
     }
 
-    /**
-     * WLED DRGB UDP Realtime frame:
-     * Byte 0 = 2 (DRGB protocol), Byte 1 = timeout in seconds, then R,G,B per LED segment.
-     */
     fun wledDrgbFrame(segments: List<RgbColor>, pinOrder: PinOrder, timeoutSec: Int = 2): ByteArray {
         val result = ByteArray(2 + segments.size * 3)
         result[0] = 0x02

@@ -31,6 +31,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.model.BleChipset
 import com.example.model.PinOrder
 import com.example.model.RgbColor
 import com.example.ui.theme.MonoFontFamily
@@ -42,6 +43,7 @@ fun ControllerSettingsSheet(
     state: NeonUiState,
     onDismiss: () -> Unit,
     onSelectPinOrder: (PinOrder) -> Unit,
+    onSelectBleChipset: (BleChipset) -> Unit,
     onTestPinColor: (RgbColor) -> Unit,
     onToggleSoftPowerFade: (Boolean) -> Unit,
     onSelectFpsLimit: (Int) -> Unit
@@ -66,6 +68,51 @@ fun ControllerSettingsSheet(
                 style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
+
+            // BLE Chipset Protocol Selector
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(20.dp))
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Протокол Bluetooth-ленты",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Если лента подключилась по Bluetooth, но не меняет цвет — выберите нужный протокол чипа:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        BleChipset.entries.forEach { chipset ->
+                            FilterChip(
+                                selected = state.bleChipset == chipset,
+                                onClick = { onSelectBleChipset(chipset) },
+                                label = {
+                                    Column {
+                                        Text(chipset.shortName, style = MaterialTheme.typography.labelLarge)
+                                        Text(
+                                            text = chipset.label,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily)
+                                        )
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("settings_ble_chipset_${chipset.name.lowercase()}")
+                            )
+                        }
+                    }
+                }
+            }
 
             // RGB Pin Sequence Calibration (Replaces Lotus Lantern's Modify Pin Sequence)
             Surface(

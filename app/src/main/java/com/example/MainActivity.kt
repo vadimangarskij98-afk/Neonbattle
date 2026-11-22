@@ -312,7 +312,10 @@ fun NeonFlowRoot(
             onAddManualWifi = viewModel::addManualWifiDevice,
             onConnectDevice = viewModel::saveAndConnectDevice,
             onRemoveSavedDevice = viewModel::removeSavedDevice,
-            onDisconnect = viewModel::disconnectDevice
+            onDisconnect = viewModel::disconnectDevice,
+            onSelectBleChipset = viewModel::setBleChipset,
+            onTestColor = viewModel::testBleQuickColor,
+            onTogglePower = viewModel::togglePower
         )
     }
 
@@ -321,6 +324,7 @@ fun NeonFlowRoot(
             state = state,
             onDismiss = { showSettingsSheet = false },
             onSelectPinOrder = viewModel::setPinOrder,
+            onSelectBleChipset = viewModel::setBleChipset,
             onTestPinColor = viewModel::testPinColor,
             onToggleSoftPowerFade = viewModel::setSoftPowerFade,
             onSelectFpsLimit = viewModel::setFpsLimit

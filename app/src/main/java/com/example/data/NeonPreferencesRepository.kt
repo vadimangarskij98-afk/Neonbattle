@@ -28,6 +28,7 @@ private val Context.neonDataStore: DataStore<Preferences> by preferencesDataStor
 
 data class StoredAppSettings(
     val pinOrder: PinOrder = PinOrder.RGB,
+    val bleChipset: com.example.model.BleChipset = com.example.model.BleChipset.LOTUS_ELK_V6,
     val softPowerFade: Boolean = true,
     val fpsLimit: Int = 25,
     val brightness: Float = 0.88f,
@@ -57,6 +58,7 @@ class NeonPreferencesRepository(private val context: Context) {
 
     private object Keys {
         val PIN_ORDER = stringPreferencesKey("pin_order")
+        val BLE_CHIPSET = stringPreferencesKey("ble_chipset")
         val SOFT_POWER_FADE = booleanPreferencesKey("soft_power_fade")
         val FPS_LIMIT = intPreferencesKey("fps_limit")
         val BRIGHTNESS = floatPreferencesKey("brightness")
@@ -76,6 +78,9 @@ class NeonPreferencesRepository(private val context: Context) {
             pinOrder = prefs[Keys.PIN_ORDER]?.let { name ->
                 PinOrder.entries.firstOrNull { it.name == name }
             } ?: PinOrder.RGB,
+            bleChipset = prefs[Keys.BLE_CHIPSET]?.let { name ->
+                com.example.model.BleChipset.entries.firstOrNull { it.name == name }
+            } ?: com.example.model.BleChipset.LOTUS_ELK_V6,
             softPowerFade = prefs[Keys.SOFT_POWER_FADE] ?: true,
             fpsLimit = (prefs[Keys.FPS_LIMIT] ?: 25).coerceIn(10, 30),
             brightness = (prefs[Keys.BRIGHTNESS] ?: 0.88f).coerceIn(0.05f, 1f),
@@ -96,6 +101,10 @@ class NeonPreferencesRepository(private val context: Context) {
 
     suspend fun savePinOrder(pinOrder: PinOrder) {
         context.neonDataStore.edit { it[Keys.PIN_ORDER] = pinOrder.name }
+    }
+
+    suspend fun saveBleChipset(chipset: com.example.model.BleChipset) {
+        context.neonDataStore.edit { it[Keys.BLE_CHIPSET] = chipset.name }
     }
 
     suspend fun saveSoftPowerFade(enabled: Boolean) {

@@ -190,9 +190,16 @@ enum class ControllerProtocol(
     )
 }
 
-enum class BleChipset(val label: String) {
-    LOTUS_ELK("Lotus / ELK-BLEDOM (7E..EF)"),
-    TRIONES_HAPPY("Triones / HappyLighting (56..AA)")
+/**
+ * Exact Bluetooth LE packet dialects used by Lotus Lantern (wl.smartled),
+ * ELK-BLEDOM, MELK-OA/OC, LotusLanternX (BJ_LED), Triones, and MagicBLE strips.
+ */
+enum class BleChipset(val shortName: String, val label: String) {
+    LOTUS_ELK_V6("Lotus V6 / MELK", "Lotus Lantern V6 / ELK-BLEDOM (7E 07..10 EF)"),
+    LOTUS_ELK_LEGACY("ELK Классика", "ELK-BLEDOM Классика (7E 00..00 EF)"),
+    LOTUS_X_BC("LotusX / BJ_LED", "LotusLanternX / BJ_LED RGBIC (BC..55)"),
+    TRIONES_HAPPY("Triones / Happy", "Triones / HappyLighting (56..AA)"),
+    MAGIC_BLE_31("Magic BLE", "Magic Home / Zengge BLE (31..0F)")
 }
 
 data class LedDevice(
@@ -204,13 +211,18 @@ data class LedDevice(
     val macAddress: String = "",
     val isSaved: Boolean = false,
     val rssi: Int = -60,
-    val isLikelyLed: Boolean = true
+    val isLikelyLed: Boolean = true,
+    val serviceHint: String = ""
 )
 
 sealed interface ConnectionState {
     data object Disconnected : ConnectionState
     data class Connecting(val device: LedDevice) : ConnectionState
-    data class Connected(val device: LedDevice, val chipsetInfo: String = "") : ConnectionState
+    data class Connected(
+        val device: LedDevice,
+        val chipsetInfo: String = "",
+        val gattChannelInfo: String = ""
+    ) : ConnectionState
     data class Error(val message: String, val device: LedDevice? = null) : ConnectionState
 }
 

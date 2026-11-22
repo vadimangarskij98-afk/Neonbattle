@@ -15,6 +15,7 @@ import com.example.hardware.WifiLedTransport
 import com.example.model.ActiveControllerMode
 import com.example.model.AudioFrame
 import com.example.model.AudioTrackItem
+import com.example.model.BleChipset
 import com.example.model.ColorControlSubMode
 import com.example.model.ConnectionState
 import com.example.model.ControllerProtocol
@@ -115,6 +116,7 @@ data class NeonUiState(
     val isWifiScanning: Boolean = false,
     val isBleScanning: Boolean = false,
     val pinOrder: PinOrder = PinOrder.RGB,
+    val bleChipset: BleChipset = BleChipset.LOTUS_ELK_V6,
     val softPowerFade: Boolean = true,
     val fpsLimit: Int = 25,
     val statusBannerMessage: String? = null
@@ -146,7 +148,10 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
     private var powerToggleJob: Job? = null
     private var persistSliderJob: Job? = null
     private var bleScanTimeoutJob: Job? = null
+    private var bleBrightnessJob: Job? = null
 
+    @Volatile
+    private var isBleHandshaking: Boolean = false
     private var lastSentColor: RgbColor? = null
     private var lastHardwareSendMs: Long = 0L
     private var lastTriggeredScheduleMinute: Int = -1
@@ -166,9 +171,11 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
     private fun loadInitialPreferences() {
         viewModelScope.launch {
             val stored = prefsRepo.settingsFlow.first()
+            bleTransport.setActiveChipset(stored.bleChipset)
             _uiState.update { state ->
                 state.copy(
                     pinOrder = stored.pinOrder,
+                    bleChipset = stored.bleChipset,
                     softPowerFade = stored.softPowerFade,
                     fpsLimit = stored.fpsLimit,
                     brightness = stored.brightness,
@@ -361,12 +368,15 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
         segments: List<RgbColor>
     ) {
         val connected = state.connectionState as? ConnectionState.Connected ?: return
+        val isWifi = connected.device.protocol.isWifi
+        if (!isWifi && isBleHandshaking) return
+
         val now = System.currentTimeMillis()
-        // BLE GATT is happiest up to ~18 FPS so packets never queue; Wi-Fi supports up to 30 FPS
-        val effectiveFps = if (connected.device.protocol.isWifi) {
+        // Cheap BLE 4.0 LED chips handle up to ~10-12 FPS smoothly without dropping GATT writes
+        val effectiveFps = if (isWifi) {
             state.fpsLimit.coerceIn(10, 30)
         } else {
-            state.fpsLimit.coerceIn(10, 18)
+            state.fpsLimit.coerceIn(8, 12)
         }
         val minIntervalMs = 1000L / effectiveFps
         if (now - lastHardwareSendMs < minIntervalMs) return
@@ -376,19 +386,20 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
             state.activeMode == ActiveControllerMode.MUSIC_PLAYER
 
         val prev = lastSentColor
+        val threshold = if (isWifi) 1 else 2
         val changedSignificantly = prev == null ||
-            kotlin.math.abs(prev.r - primary.r) >= 1 ||
-            kotlin.math.abs(prev.g - primary.g) >= 1 ||
-            kotlin.math.abs(prev.b - primary.b) >= 1 ||
-            kotlin.math.abs(prev.w - primary.w) >= 2
+            kotlin.math.abs(prev.r - primary.r) >= threshold ||
+            kotlin.math.abs(prev.g - primary.g) >= threshold ||
+            kotlin.math.abs(prev.b - primary.b) >= threshold ||
+            (isWifi && kotlin.math.abs(prev.w - primary.w) >= 2)
 
-        if (!changedSignificantly && !isAnimated) return
+        // Never spam BLE with identical frames; Wi-Fi WLED DRGB can refresh animated frames
+        if (!changedSignificantly && (!isWifi || !isAnimated)) return
 
         lastHardwareSendMs = now
         lastSentColor = primary
 
-        val device = connected.device
-        if (device.protocol.isWifi) {
+        if (isWifi) {
             wifiTransport.sendColorFrame(
                 color = primary,
                 segments = segments,
@@ -484,6 +495,14 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
         val clamped = value.coerceIn(0.05f, 1f)
         _uiState.update { it.copy(brightness = clamped) }
         schedulePersistSliders()
+        val connected = _uiState.value.connectionState as? ConnectionState.Connected
+        if (connected != null && !connected.device.protocol.isWifi) {
+            bleBrightnessJob?.cancel()
+            bleBrightnessJob = viewModelScope.launch {
+                delay(120L)
+                bleTransport.sendBrightness((clamped * 100f).toInt().coerceIn(5, 100))
+            }
+        }
     }
 
     fun setSmoothness(value: Float) {
@@ -953,29 +972,49 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 )
             } else {
-                val result = bleTransport.connect(savedDevice)
+                val result = bleTransport.connect(savedDevice, preferredChipset = null)
                 result.fold(
-                    onSuccess = { chipset ->
+                    onSuccess = { success ->
                         lastSentColor = null
+                        isBleHandshaking = true
                         _uiState.update {
                             it.copy(
+                                bleChipset = success.chipset,
                                 connectionState = ConnectionState.Connected(
                                     device = savedDevice,
-                                    chipsetInfo = chipset.label
+                                    chipsetInfo = success.chipset.shortName,
+                                    gattChannelInfo = success.gattChannelInfo
                                 ),
-                                statusBannerMessage = "BLE подключено: ${savedDevice.name} (${chipset.label})"
+                                statusBannerMessage = "BLE подключено: ${savedDevice.name} (${success.chipset.shortName})"
                             )
                         }
-                        bleTransport.sendPower(_uiState.value.isPowerOn)
+                        prefsRepo.saveBleChipset(success.chipset)
+                        val cur = _uiState.value
+                        val initColor = cur.livePrimaryColor.takeIf { it.r + it.g + it.b > 10 }
+                            ?: cur.selectedColor
+                        try {
+                            if (cur.isPowerOn) {
+                                bleTransport.sendInitHandshake(
+                                    color = initColor,
+                                    pinOrder = cur.pinOrder,
+                                    brightnessPercent = (cur.brightness * 100f).toInt().coerceIn(20, 100)
+                                )
+                            } else {
+                                bleTransport.sendPower(false)
+                            }
+                        } finally {
+                            isBleHandshaking = false
+                        }
                     },
                     onFailure = { err ->
+                        isBleHandshaking = false
                         _uiState.update {
                             it.copy(
                                 connectionState = ConnectionState.Error(
                                     message = err.message ?: "Не удалось подключиться по Bluetooth",
                                     device = savedDevice
                                 ),
-                                statusBannerMessage = "BLE ошибка: ${err.message ?: "попробуйте снова"}"
+                                statusBannerMessage = err.message ?: "BLE ошибка: попробуйте снова"
                             )
                         }
                     }
@@ -1023,8 +1062,70 @@ class NeonViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun testPinColor(color: RgbColor) {
+    fun setBleChipset(chipset: BleChipset) {
+        bleTransport.setActiveChipset(chipset)
+        lastSentColor = null
+        _uiState.update { state ->
+            val updatedConn = (state.connectionState as? ConnectionState.Connected)?.let { conn ->
+                if (!conn.device.protocol.isWifi) conn.copy(chipsetInfo = chipset.shortName) else conn
+            } ?: state.connectionState
+            state.copy(
+                bleChipset = chipset,
+                connectionState = updatedConn,
+                statusBannerMessage = "Протокол BLE: ${chipset.shortName} — отправлен тест"
+            )
+        }
+        viewModelScope.launch {
+            prefsRepo.saveBleChipset(chipset)
+            val connected = _uiState.value.connectionState as? ConnectionState.Connected
+            if (connected != null && !connected.device.protocol.isWifi) {
+                isBleHandshaking = true
+                try {
+                    val cur = _uiState.value
+                    bleTransport.sendInitHandshake(
+                        color = cur.selectedColor,
+                        pinOrder = cur.pinOrder,
+                        brightnessPercent = (cur.brightness * 100f).toInt().coerceIn(30, 100)
+                    )
+                } finally {
+                    isBleHandshaking = false
+                }
+            }
+        }
+    }
+
+    fun testBleQuickColor(color: RgbColor) {
         setStaticColor(color)
+        lastSentColor = null
+        val connected = _uiState.value.connectionState as? ConnectionState.Connected ?: return
+        viewModelScope.launch {
+            if (connected.device.protocol.isWifi) {
+                wifiTransport.sendPower(true)
+                wifiTransport.sendColorFrame(
+                    color = color,
+                    segments = List(36) { color },
+                    pinOrder = _uiState.value.pinOrder,
+                    brightnessPercent = 100,
+                    smoothness = 0f,
+                    isStreamingAnimation = false
+                )
+            } else {
+                isBleHandshaking = true
+                try {
+                    bleTransport.sendInitHandshake(
+                        color = color,
+                        pinOrder = _uiState.value.pinOrder,
+                        brightnessPercent = 100
+                    )
+                } finally {
+                    isBleHandshaking = false
+                }
+            }
+        }
+    }
+
+    fun testPinColor(color: RgbColor) {
+        testBleQuickColor(color)
     }
 
     fun setSoftPowerFade(enabled: Boolean) {

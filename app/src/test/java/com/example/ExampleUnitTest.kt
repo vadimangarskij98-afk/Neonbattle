@@ -35,18 +35,49 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun lotusAndTrionesBlePacketsAreValid() {
-        val lotus = LedProtocolPackets.lotusColor(RgbColor(255, 128, 64), PinOrder.RGB)
-        assertEquals(9, lotus.size)
-        assertEquals(0x7E.toByte(), lotus[0])
-        assertEquals(0xEF.toByte(), lotus[8])
+    fun allFiveBleProtocolPacketsAreValid() {
+        // 1. Lotus Lantern V6 / MELK (7E 07 05 03 R G B 10 EF)
+        val lotusV6On = LedProtocolPackets.lotusV6Power(true)
+        assertArrayEquals(
+            byteArrayOf(0x7E, 0x04, 0x04, 0xF0.toByte(), 0x00, 0x01, 0xFF.toByte(), 0x00, 0xEF.toByte()),
+            lotusV6On
+        )
+        val lotusV6Color = LedProtocolPackets.lotusV6Color(RgbColor(255, 16, 48), PinOrder.RGB)
+        assertArrayEquals(
+            byteArrayOf(0x7E, 0x07, 0x05, 0x03, 0xFF.toByte(), 0x10, 0x30, 0x10, 0xEF.toByte()),
+            lotusV6Color
+        )
+        val lotusV6Bri = LedProtocolPackets.lotusV6Brightness(80)
+        assertArrayEquals(
+            byteArrayOf(0x7E, 0x04, 0x01, 80.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0x00, 0xEF.toByte()),
+            lotusV6Bri
+        )
 
+        // 2. ELK-BLEDOM Legacy (7E 00 05 03 R G B 00 EF)
+        val lotusLegacy = LedProtocolPackets.lotusColor(RgbColor(255, 128, 64), PinOrder.RGB)
+        assertArrayEquals(
+            byteArrayOf(0x7E, 0x00, 0x05, 0x03, 0xFF.toByte(), 0x80.toByte(), 0x40, 0x00, 0xEF.toByte()),
+            lotusLegacy
+        )
+
+        // 3. LotusLanternX / BJ_LED (BC .. 55)
+        val lotusXOn = LedProtocolPackets.lotusXPower(true)
+        assertArrayEquals(byteArrayOf(0xBC.toByte(), 0x01, 0x01, 0x01, 0x55), lotusXOn)
+        val lotusXRed = LedProtocolPackets.lotusXColor(RgbColor(255, 0, 0), PinOrder.RGB)
+        assertEquals(10, lotusXRed.size)
+        assertEquals(0xBC.toByte(), lotusXRed[0])
+        assertEquals(0x55.toByte(), lotusXRed[9])
+        val lotusXBri = LedProtocolPackets.lotusXBrightness(100)
+        assertEquals(10, lotusXBri.size)
+        assertEquals(0x03.toByte(), lotusXBri[3]) // 1000 = 0x03E8
+        assertEquals(0xE8.toByte(), lotusXBri[4])
+
+        // 4. Triones / HappyLighting (56 R G B 00 F0 AA)
         val triones = LedProtocolPackets.trionesColor(RgbColor(255, 16, 48), PinOrder.RGB)
         assertArrayEquals(
             byteArrayOf(0x56, 0xFF.toByte(), 0x10, 0x30, 0x00, 0xF0.toByte(), 0xAA.toByte()),
             triones
         )
-
         val trionesOn = LedProtocolPackets.trionesPower(true)
         assertArrayEquals(byteArrayOf(0xCC.toByte(), 0x23, 0x33), trionesOn)
     }

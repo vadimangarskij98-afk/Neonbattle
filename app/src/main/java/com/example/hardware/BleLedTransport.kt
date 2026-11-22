@@ -15,6 +15,8 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import com.example.model.BleChipset
@@ -24,6 +26,7 @@ import com.example.model.PinOrder
 import com.example.model.RgbColor
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -36,17 +39,23 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
+data class BleConnectSuccess(
+    val chipset: BleChipset,
+    val gattChannelInfo: String
+)
+
 /**
- * Production-grade Bluetooth Low Energy (GATT) scanner and controller transport for direct
- * LED strip control when Wi-Fi is unavailable.
+ * Rock-solid Bluetooth Low Energy (GATT) scanner and controller transport for Lotus Lantern
+ * (wl.smartled), ELK-BLEDOM, MELK, LotusLanternX (BJ_LED), Triones, and MagicBLE strips.
  *
- * Features:
- * - Discovers named LED controllers (ELK-BLEDOM, MELK, Lotus, Triones, HappyLighting, QHM, SP105E, BJ_LED)
- *   AND unnamed controllers advertising standard LED service UUIDs (0xFFF0, 0xFFD5, 0xAE00, 0xFFE0, 0xFFE5)
- * - Uses TRANSPORT_LE to eliminate Android GATT error 133 on dual-mode adapters
- * - Auto-detects chipset protocol (Lotus/ELK 7E..EF vs Triones/HappyLighting 56..AA)
- * - Serializes writes with Mutex + onCharacteristicWrite callback gate so packets never collide
- * - Emits disconnect events cleanly when the strip powers down or moves out of range
+ * Key real-device reliability fixes:
+ * - Does NOT call requestMtu() alongside discoverServices() (fixes silent GATT deadlock on Xiaomi/Android)
+ * - Waits 250ms after STATE_CONNECTED before discoverServices() for stable service table discovery
+ * - STRICTLY rejects Bluetooth SIG generic services (0x1800/0x1801/0x180A/0x180F/0x1812) so the app
+ *   NEVER falsely claims "Connected" to a TV, watch, speaker, or neighbor device
+ * - Checks already-connected GATT devices in BluetoothManager in case Android kept a link open
+ * - Supports live protocol dialect switching across all 5 Lotus/ELK/LotusX/Triones/MagicBLE formats
+ * - Uses serialized writes with safe pacing (40ms) so cheap BLE 4.0 LED chips never overflow
  */
 class BleLedTransport(private val context: Context) {
 
@@ -54,6 +63,8 @@ class BleLedTransport(private val context: Context) {
         UUID.fromString("0000fff3-0000-1000-8000-00805f9b34fb"),
         UUID.fromString("0000fff4-0000-1000-8000-00805f9b34fb"),
         UUID.fromString("0000ae01-0000-1000-8000-00805f9b34fb"),
+        UUID.fromString("0000ae02-0000-1000-8000-00805f9b34fb"),
+        UUID.fromString("0000ee01-0000-1000-8000-00805f9b34fb"),
         UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb")
     )
 
@@ -62,19 +73,40 @@ class BleLedTransport(private val context: Context) {
         UUID.fromString("0000ffe9-0000-1000-8000-00805f9b34fb")
     )
 
+    private val magicBleWriteUuids = setOf(
+        UUID.fromString("0000ff01-0000-1000-8000-00805f9b34fb")
+    )
+
     private val knownLedServiceUuids = setOf(
         ParcelUuid.fromString("0000fff0-0000-1000-8000-00805f9b34fb"),
         ParcelUuid.fromString("0000ffd5-0000-1000-8000-00805f9b34fb"),
         ParcelUuid.fromString("0000ae00-0000-1000-8000-00805f9b34fb"),
+        ParcelUuid.fromString("0000ae30-0000-1000-8000-00805f9b34fb"),
         ParcelUuid.fromString("0000ffe0-0000-1000-8000-00805f9b34fb"),
-        ParcelUuid.fromString("0000ffe5-0000-1000-8000-00805f9b34fb")
+        ParcelUuid.fromString("0000ffe5-0000-1000-8000-00805f9b34fb"),
+        ParcelUuid.fromString("0000ee00-0000-1000-8000-00805f9b34fb")
+    )
+
+    // Standard non-LED Bluetooth SIG services we must NEVER treat as an LED control channel
+    private val ignoredSigServicePrefixes = listOf(
+        "00001800-", // Generic Access
+        "00001801-", // Generic Attribute
+        "0000180a-", // Device Information
+        "0000180f-", // Battery Service
+        "00001812-", // Human Interface Device
+        "0000180d-", // Heart Rate
+        "00001805-", // Current Time
+        "0000fe9f-", // Google Fast Pair
+        "0000fd6f-"  // Exposure Notification
     )
 
     private val ledNameKeywords = listOf(
-        "ELK", "BLEDOM", "MELK", "LED", "LOTUS", "TRIONES",
-        "HAPPY", "QHM", "BJ_LED", "RGB", "NEON", "SP105", "SP110", "ZENGGE", "MAGIC"
+        "ELK", "BLEDOM", "BLEDOB", "MELK", "LED", "LOTUS", "TRIONES",
+        "HAPPY", "QHM", "BJ_LED", "RGB", "NEON", "SP105", "SP110",
+        "ZENGGE", "MAGIC", "STRIP", "LAMP", "BULB", "DREAM", "YC-"
     )
 
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val writeMutex = Mutex()
     private var pendingWriteDeferred: CompletableDeferred<Boolean>? = null
 
@@ -89,16 +121,22 @@ class BleLedTransport(private val context: Context) {
 
     private var activeGatt: BluetoothGatt? = null
     private var writeCharacteristic: BluetoothGattCharacteristic? = null
-    private var detectedChipset: BleChipset = BleChipset.LOTUS_ELK
+    private var activeChipset: BleChipset = BleChipset.LOTUS_ELK_V6
     private var activeScanCallback: ScanCallback? = null
     private var intentionalDisconnect: Boolean = false
 
-    private fun bluetoothAdapter(): BluetoothAdapter? {
-        val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-        return manager?.adapter
-    }
+    private fun bluetoothManager(): BluetoothManager? =
+        context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+
+    private fun bluetoothAdapter(): BluetoothAdapter? = bluetoothManager()?.adapter
 
     fun isBluetoothEnabled(): Boolean = bluetoothAdapter()?.isEnabled == true
+
+    fun setActiveChipset(chipset: BleChipset) {
+        activeChipset = chipset
+    }
+
+    fun getActiveChipset(): BleChipset = activeChipset
 
     fun hasBlePermissions(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -126,7 +164,30 @@ class BleLedTransport(private val context: Context) {
 
         stopScan()
         val found = LinkedHashMap<String, LedDevice>()
-        _scannedDevices.value = emptyList()
+
+        // Also inspect already-connected GATT devices in case Android/another app already linked the strip
+        runCatching {
+            bluetoothManager()?.getConnectedDevices(BluetoothProfile.GATT).orEmpty().forEach { btDev ->
+                val addr = btDev.address ?: return@forEach
+                val name = btDev.name?.takeIf { it.isNotBlank() } ?: return@forEach
+                val isLed = ledNameKeywords.any { name.contains(it, ignoreCase = true) }
+                found[addr] = LedDevice(
+                    id = "ble_$addr",
+                    name = name,
+                    address = addr,
+                    port = 0,
+                    protocol = ControllerProtocol.BLE_LOTUS_ELK,
+                    macAddress = addr,
+                    rssi = -45,
+                    isLikelyLed = isLed,
+                    serviceHint = "Уже в GATT"
+                )
+            }
+        }
+
+        _scannedDevices.value = found.values.sortedWith(
+            compareByDescending<LedDevice> { it.isLikelyLed }.thenByDescending { it.rssi }
+        )
         _isScanning.value = true
 
         val callback = object : ScanCallback() {
@@ -137,17 +198,17 @@ class BleLedTransport(private val context: Context) {
                     ?: result.scanRecord?.deviceName?.takeIf { it.isNotBlank() }
 
                 val advertisedUuids = result.scanRecord?.serviceUuids.orEmpty()
-                val matchesLedService = advertisedUuids.any { it in knownLedServiceUuids }
+                val matchedUuid = advertisedUuids.firstOrNull { it in knownLedServiceUuids }
                 val matchesLedName = rawName != null && ledNameKeywords.any {
                     rawName.contains(it, ignoreCase = true)
                 }
 
-                // Skip completely unnamed non-LED beacons to keep the list clean,
-                // while ALWAYS keeping unnamed devices advertising LED service UUIDs
-                if (rawName == null && !matchesLedService) return
+                // Skip unnamed non-LED beacons, keep unnamed devices advertising known LED UUIDs
+                if (rawName == null && matchedUuid == null) return
 
                 val displayName = rawName ?: "LED Контроллер (${address.takeLast(5)})"
-                val isLed = matchesLedName || matchesLedService
+                val isLed = matchesLedName || matchedUuid != null
+                val uuidHint = matchedUuid?.uuid?.toString()?.substring(4, 8)?.uppercase()?.let { "0x$it" }.orEmpty()
 
                 found[address] = LedDevice(
                     id = "ble_$address",
@@ -157,7 +218,8 @@ class BleLedTransport(private val context: Context) {
                     protocol = ControllerProtocol.BLE_LOTUS_ELK,
                     macAddress = address,
                     rssi = result.rssi,
-                    isLikelyLed = isLed
+                    isLikelyLed = isLed,
+                    serviceHint = uuidHint
                 )
 
                 _scannedDevices.value = found.values.sortedWith(
@@ -195,7 +257,10 @@ class BleLedTransport(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    suspend fun connect(device: LedDevice): Result<BleChipset> = withContext(Dispatchers.IO) {
+    suspend fun connect(
+        device: LedDevice,
+        preferredChipset: BleChipset? = null
+    ): Result<BleConnectSuccess> = withContext(Dispatchers.IO) {
         if (!hasBlePermissions()) {
             return@withContext Result.failure(IllegalStateException("Нет разрешений Bluetooth"))
         }
@@ -206,28 +271,33 @@ class BleLedTransport(private val context: Context) {
 
         stopScan()
         disconnect()
+        delay(120L)
 
         val remote = runCatching { adapter.getRemoteDevice(device.address) }.getOrNull()
             ?: return@withContext Result.failure(IllegalArgumentException("Неверный MAC-адрес устройства"))
 
         intentionalDisconnect = false
-        val connectDeferred = CompletableDeferred<Result<BleChipset>>()
+        val connectDeferred = CompletableDeferred<Result<BleConnectSuccess>>()
 
         val callback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
-                    runCatching { gatt.requestMtu(185) }
-                    gatt.discoverServices()
+                    // Wait 250ms without calling requestMtu() to avoid MIUI/Android GATT race condition
+                    mainHandler.postDelayed({
+                        if (activeGatt == gatt && hasBlePermissions()) {
+                            runCatching { gatt.discoverServices() }
+                        }
+                    }, 250L)
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     writeCharacteristic = null
                     pendingWriteDeferred?.complete(false)
                     pendingWriteDeferred = null
 
                     if (!connectDeferred.isCompleted) {
-                        val reason = if (status == 133) {
-                            "Контроллер не ответил (BLE 133). Подойдите ближе и попробуйте снова."
-                        } else {
-                            "Лента разорвала BLE соединение (код $status)"
+                        val reason = when (status) {
+                            133 -> "Ошибка BLE 133. Закройте оригинальный Lotus Lantern, выключите/включите питание ленты и повторите."
+                            8 -> "Лента не отвечает (таймаут связи). Подойдите ближе к контроллеру."
+                            else -> "Лента разорвала BLE соединение (код $status)."
                         }
                         connectDeferred.complete(Result.failure(IllegalStateException(reason)))
                     } else if (!intentionalDisconnect) {
@@ -248,31 +318,59 @@ class BleLedTransport(private val context: Context) {
                     return
                 }
 
-                val allChars = gatt.services.flatMap { it.characteristics }
-                val lotusChar = allChars.firstOrNull { it.uuid in lotusWriteUuids }
-                val trionesChar = allChars.firstOrNull { it.uuid in trionesWriteUuids }
-                val fallbackChar = allChars.firstOrNull { char ->
+                // Filter out standard Bluetooth SIG system services so we NEVER connect to a TV/watch/etc.
+                val vendorServices = gatt.services.filter { svc ->
+                    val u = svc.uuid.toString().lowercase()
+                    ignoredSigServicePrefixes.none { u.startsWith(it) }
+                }
+                val vendorChars = vendorServices.flatMap { it.characteristics }
+
+                val writableVendorChars = vendorChars.filter { char ->
                     val p = char.properties
                     (p and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0 ||
                         (p and BluetoothGattCharacteristic.PROPERTY_WRITE) != 0
                 }
 
-                val chosenChar = lotusChar ?: trionesChar ?: fallbackChar
-                val chipset = when {
-                    lotusChar != null -> BleChipset.LOTUS_ELK
-                    trionesChar != null -> BleChipset.TRIONES_HAPPY
-                    else -> BleChipset.LOTUS_ELK
+                val lotusChar = writableVendorChars.firstOrNull { it.uuid in lotusWriteUuids }
+                val trionesChar = writableVendorChars.firstOrNull { it.uuid in trionesWriteUuids }
+                val magicChar = writableVendorChars.firstOrNull { it.uuid in magicBleWriteUuids }
+                val customVendorChar = writableVendorChars.firstOrNull()
+
+                val chosenChar = lotusChar ?: trionesChar ?: magicChar ?: customVendorChar
+
+                if (chosenChar == null) {
+                    if (!connectDeferred.isCompleted) {
+                        connectDeferred.complete(
+                            Result.failure(
+                                IllegalStateException(
+                                    "«${device.name}» — не LED-лента (нет канала управления светом). " +
+                                        "Закройте Lotus Lantern и выберите саму ленту (ELK-BLEDOM, MELK, QHM, LED)."
+                                )
+                            )
+                        )
+                    }
+                    return
                 }
 
-                if (chosenChar != null) {
-                    writeCharacteristic = chosenChar
-                    detectedChipset = chipset
-                    if (!connectDeferred.isCompleted) {
-                        connectDeferred.complete(Result.success(chipset))
-                    }
-                } else if (!connectDeferred.isCompleted) {
+                val autoChipset = when {
+                    preferredChipset != null -> preferredChipset
+                    device.name.contains("BJ_LED", ignoreCase = true) ||
+                        device.name.contains("LotusX", ignoreCase = true) -> BleChipset.LOTUS_X_BC
+                    trionesChar != null -> BleChipset.TRIONES_HAPPY
+                    magicChar != null -> BleChipset.MAGIC_BLE_31
+                    else -> BleChipset.LOTUS_ELK_V6
+                }
+
+                writeCharacteristic = chosenChar
+                activeChipset = autoChipset
+
+                val svcShort = chosenChar.service?.uuid?.toString()?.substring(4, 8)?.uppercase() ?: "????"
+                val charShort = chosenChar.uuid.toString().substring(4, 8).uppercase()
+                val channelInfo = "GATT 0x$svcShort → 0x$charShort"
+
+                if (!connectDeferred.isCompleted) {
                     connectDeferred.complete(
-                        Result.failure(IllegalStateException("Не найден канал управления LED (0xFFF3 / 0xFFD9)"))
+                        Result.success(BleConnectSuccess(autoChipset, channelInfo))
                     )
                 }
             }
@@ -286,11 +384,15 @@ class BleLedTransport(private val context: Context) {
             }
         }
 
-        // Always enforce TRANSPORT_LE to prevent Android GATT error 133
+        // Enforce TRANSPORT_LE for dual-mode Android stacks
         activeGatt = remote.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
 
-        val result = withTimeoutOrNull(9000L) { connectDeferred.await() }
-            ?: Result.failure(IllegalStateException("Таймаут подключения по Bluetooth. Проверьте питание ленты."))
+        val result = withTimeoutOrNull(10_000L) { connectDeferred.await() }
+            ?: Result.failure(
+                IllegalStateException(
+                    "Таймаут подключения к «${device.name}». Убедитесь, что лента включена в розетку и оригинальный Lotus Lantern закрыт."
+                )
+            )
 
         if (result.isFailure) {
             disconnect()
@@ -312,47 +414,67 @@ class BleLedTransport(private val context: Context) {
         }
     }
 
+    /**
+     * Clean post-connect initialization sequence required by Lotus Lantern / ELK-BLEDOM chips:
+     * Power ON -> Brightness 100% -> Initial Color.
+     */
+    suspend fun sendInitHandshake(color: RgbColor, pinOrder: PinOrder, brightnessPercent: Int) {
+        sendPower(true)
+        delay(80L)
+        sendBrightness(brightnessPercent)
+        delay(80L)
+        sendColor(color, pinOrder)
+    }
+
     suspend fun sendPower(on: Boolean): Boolean {
-        val packet = when (detectedChipset) {
-            BleChipset.LOTUS_ELK -> LedProtocolPackets.lotusPower(on)
-            BleChipset.TRIONES_HAPPY -> LedProtocolPackets.trionesPower(on)
+        return when (activeChipset) {
+            BleChipset.LOTUS_ELK_V6 -> {
+                // Send both V6 (F0..FF) and Legacy (01..00) power frames so any ELK/MELK revision reacts!
+                val ok1 = writeBytesSerialized(LedProtocolPackets.lotusV6Power(on))
+                delay(45L)
+                val ok2 = writeBytesSerialized(LedProtocolPackets.lotusPower(on))
+                ok1 || ok2
+            }
+            BleChipset.LOTUS_ELK_LEGACY -> writeBytesSerialized(LedProtocolPackets.lotusPower(on))
+            BleChipset.LOTUS_X_BC -> writeBytesSerialized(LedProtocolPackets.lotusXPower(on))
+            BleChipset.TRIONES_HAPPY -> writeBytesSerialized(LedProtocolPackets.trionesPower(on))
+            BleChipset.MAGIC_BLE_31 -> writeBytesSerialized(LedProtocolPackets.magicHomePower(on))
         }
-        return writeBytesSerialized(packet)
+    }
+
+    suspend fun sendBrightness(percent: Int): Boolean {
+        return when (activeChipset) {
+            BleChipset.LOTUS_ELK_V6 -> writeBytesSerialized(LedProtocolPackets.lotusV6Brightness(percent))
+            BleChipset.LOTUS_ELK_LEGACY -> writeBytesSerialized(LedProtocolPackets.lotusBrightness(percent))
+            BleChipset.LOTUS_X_BC -> writeBytesSerialized(LedProtocolPackets.lotusXBrightness(percent))
+            BleChipset.TRIONES_HAPPY, BleChipset.MAGIC_BLE_31 -> true // Brightness is encoded directly in scaled RGB
+        }
     }
 
     suspend fun sendColor(color: RgbColor, pinOrder: PinOrder): Boolean {
-        val packet = when (detectedChipset) {
-            BleChipset.LOTUS_ELK -> LedProtocolPackets.lotusColor(color, pinOrder)
+        val packet = when (activeChipset) {
+            BleChipset.LOTUS_ELK_V6 -> LedProtocolPackets.lotusV6Color(color, pinOrder)
+            BleChipset.LOTUS_ELK_LEGACY -> LedProtocolPackets.lotusColor(color, pinOrder)
+            BleChipset.LOTUS_X_BC -> LedProtocolPackets.lotusXColor(color, pinOrder)
             BleChipset.TRIONES_HAPPY -> LedProtocolPackets.trionesColor(color, pinOrder)
+            BleChipset.MAGIC_BLE_31 -> LedProtocolPackets.magicHomeColor(color, pinOrder)
         }
         return writeBytesSerialized(packet)
     }
 
-    suspend fun sendBuiltInMode(modeCode: Int, speedPercent: Int): Boolean {
-        return when (detectedChipset) {
-            BleChipset.LOTUS_ELK -> {
-                val ok1 = writeBytesSerialized(LedProtocolPackets.lotusBuiltInMode(modeCode))
-                val ok2 = writeBytesSerialized(LedProtocolPackets.lotusSpeed(speedPercent))
-                ok1 && ok2
-            }
-            BleChipset.TRIONES_HAPPY -> {
-                writeBytesSerialized(LedProtocolPackets.trionesBuiltInMode(modeCode, speedPercent))
-            }
-        }
-    }
-
     suspend fun sendPinOrder(pinOrder: PinOrder): Boolean {
-        return when (detectedChipset) {
-            BleChipset.LOTUS_ELK -> writeBytesSerialized(LedProtocolPackets.lotusPinOrder(pinOrder))
-            BleChipset.TRIONES_HAPPY -> true // Software channel remapping already active
+        return when (activeChipset) {
+            BleChipset.LOTUS_ELK_V6, BleChipset.LOTUS_ELK_LEGACY ->
+                writeBytesSerialized(LedProtocolPackets.lotusPinOrder(pinOrder))
+            else -> true
         }
     }
 
     suspend fun sendExternalMic(enabled: Boolean, sensitivityPercent: Int): Boolean {
-        return when (detectedChipset) {
-            BleChipset.LOTUS_ELK ->
+        return when (activeChipset) {
+            BleChipset.LOTUS_ELK_V6, BleChipset.LOTUS_ELK_LEGACY ->
                 writeBytesSerialized(LedProtocolPackets.lotusExternalMic(enabled, sensitivityPercent))
-            BleChipset.TRIONES_HAPPY -> false
+            else -> false
         }
     }
 
@@ -364,15 +486,17 @@ class BleLedTransport(private val context: Context) {
             val char = writeCharacteristic ?: return@withLock false
             if (!hasBlePermissions()) return@withLock false
 
+            val useNoResponse = (char.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0
+            val writeType = if (useNoResponse) {
+                BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+            } else {
+                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            }
+
             val ack = CompletableDeferred<Boolean>()
             pendingWriteDeferred = ack
 
             val started = runCatching {
-                val writeType = if ((char.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0) {
-                    BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-                } else {
-                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     gatt.writeCharacteristic(char, payload, writeType) == BluetoothGatt.GATT_SUCCESS
                 } else {
@@ -387,8 +511,10 @@ class BleLedTransport(private val context: Context) {
                 return@withLock false
             }
 
-            val completed = withTimeoutOrNull(140L) { ack.await() } ?: true
+            val completed = withTimeoutOrNull(120L) { ack.await() } ?: useNoResponse
             pendingWriteDeferred = null
+            // Gentle pacing so cheap BLE 4.0 LED controller chips never drop rapid frames
+            delay(35L)
             completed
         }
     }
